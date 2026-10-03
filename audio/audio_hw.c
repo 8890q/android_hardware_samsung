@@ -896,9 +896,7 @@ int disable_snd_device(struct audio_device *adev,
 {
     struct mixer_card *mixer_card;
     struct listnode *node;
-    struct audio_usecase *out_uc_info = get_usecase_from_type(adev, PCM_PLAYBACK);
     const char *snd_device_name = get_snd_device_name(snd_device);
-    const char *out_snd_device_name = NULL;
 
     if (snd_device_name == NULL)
         return -EINVAL;
@@ -920,16 +918,14 @@ int disable_snd_device(struct audio_device *adev,
               snd_device, snd_device_name);
         list_for_each(node, &uc_info->mixer_list) {
             mixer_card = node_to_item(node, struct mixer_card, uc_list_node[uc_info->id]);
+            /*
+             * libaudioroute reference counts mixer controls, so controls an
+             * input route shares with the active output route are kept on
+             * here. Re-applying the output route (as was done before) adds a
+             * reference that is never released and leaks that route, e.g.
+             * leaving the voice call path enabled after a call ends.
+             */
             audio_route_reset_and_update_path(mixer_card->audio_route, snd_device_name);
-            if (snd_device > SND_DEVICE_IN_BEGIN && out_uc_info != NULL) {
-                /*
-                 * Cycle the rx device to eliminate routing conflicts.
-                 * This prevents issues when an input route shares mixer controls with an output
-                 * route.
-                 */
-                out_snd_device_name = get_snd_device_name(out_uc_info->out_snd_device);
-                audio_route_apply_and_update_path(mixer_card->audio_route, out_snd_device_name);
-            }
 
             amplifier_enable_devices(snd_device, false);
 #ifdef DSP_POWEROFF_DELAY
@@ -2657,6 +2653,8 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
         }
 #endif
         if (val != SND_DEVICE_NONE) {
+            audio_devices_t prev_devices = out->devices;
+
             out->devices = val;
 
             if (!out->standby) {
@@ -2699,11 +2697,14 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
                 start_voice_call(adev);
             } else if ((adev->mode == AUDIO_MODE_IN_CALL) &&
                        adev->voice.in_call &&
-                       (out == adev->primary_output)) {
+                       (out == adev->primary_output) &&
+                       (out->devices != prev_devices)) {
                     /*
                      * When we select different devices we need to restart the
                      * voice call. The modem closes the stream on its end and
-                     * we do not get any output.
+                     * we do not get any output. Routing updates for the
+                     * device already in use are skipped: restarting would
+                     * reload the codec DSP firmware and drop call audio.
                      */
                     stop_voice_call(adev);
                     start_voice_call(adev);
