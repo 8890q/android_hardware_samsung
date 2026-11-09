@@ -40,12 +40,18 @@ endif
 
 define build-dtimage-target
     $(call pretty,"Target dt image: $@")
-    $(hide) for dir in $(possible_dtb_dirs); do \
-        if [ -d "$$dir" ]; then \
+    $(hide) dtb_dir=; \
+    for dir in $(possible_dtb_dirs); do \
+        if [ -d "$$dir" ] && { [ -z "$(TARGET_CUSTOM_DTBTOOL)" ] || \
+            [ -n "$$(find "$$dir" -maxdepth 1 -type f -name '*.dtb' -print -quit)" ]; }; then \
             dtb_dir="$$dir"; \
             break; \
         fi; \
     done; \
+    if [ -z "$$dtb_dir" ]; then \
+        echo "No device tree blobs found in: $(possible_dtb_dirs)" >&2; \
+        exit 1; \
+    fi; \
     $(DTBTOOL) $(BOARD_DTBTOOL_ARGS) -o $@ -s $(BOARD_KERNEL_PAGESIZE) -p $(KERNEL_OUT)/scripts/dtc/ "$$dtb_dir";
     $(hide) chmod a+r $@
 endef
